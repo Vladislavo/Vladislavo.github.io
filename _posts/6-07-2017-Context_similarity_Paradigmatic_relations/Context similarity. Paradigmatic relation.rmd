@@ -1,0 +1,276 @@
+---
+title: 'Context Similarity: Paradigmatic relations'
+author: "Vladislav Rykov"
+date: "July 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### **1. Introduction**
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;In this post we will talk about word relations in text and how we can discover them using statistical methods and natural language processing.   
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;First, let's start with discussion about what kinds of word relations exist and what is the main ideas about them. There are two main word relations:  
+
+1. Paradigmatic relations   
+2. Syntagmatic relations
+
+#### 1.1 Paradigmatic relations
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;In short,every item of language has a paradigmatic relationship with every other item which can be substituted for it (such as cat with dog). This image discribes perfectly the concept   
+im: ![](synaesthesiaandsensibilities.png)
+
+As you can see the set of words like colour, volume, taste and blade (vertical dimention) can be used in the same context, thus belonging to the same word class of category of words.   
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;On the lexical level, paradigmatic contrasts indicate which words are likely to belong to the same word class (part of speech): cat, dog, parrot in the diagram are all nouns, sat, slept, perched are all verbs.    
+
+#### 1.2. Syntagmatic relations
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Syntagmatic relationship is a quite different concept. It is found with items which occur within the same construction or context (for example, in The cat sat on the mat, cat with the and sat on the mat). In the image above the horisontal axes represents the dimention of the syntagmatic relations.    
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Syntagmatic relations between words enable one to build up a picture of co-occurrence restrictions within syntax, for example, the verbs hit, kick have to be followed by a noun (Paul hit the wall, not 'Paul hit), but sleep, doze do not normally do so (Peter slept, not 'Peter slept the bed).   
+
+Although we have talked about both relationships we will see today how to compute using R programming language the paradigmatic relations.
+
+### **2. How to compute paradigmatic relations**
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;The idea of paradigmatic relationship induces to think about similarity between two contexts corresponding to each of words. We will examine contexts of both words and pass them through the similarity funcion we are going to further define.     
+Intuitively it is easy to see that we can get a probability of each word in the context 
+
+$p(word_i,context) = \frac{count(word_i,context)}{\sum_{i} count(word_i, context)}$ 
+
+and difine the similarity function as a dot product between two probability vectors 
+
+$similarity(word_1, word_2) = \sum_{i}p(word_i,context_1) \cdot p(word_i,context_2)$. 
+
+It really makes sense and it is called EOWC (Expected Overlap of Words in Context). But it has some problems.    
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Mainly EOWC treat each word equally which is not good since we always have more and less significant words in the context (e.g "the" is less meaningful than "algorithm"). Also less meaningful words in most languages tend to appear more like articles, prepositions, etc. So we need to control these cases.   
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;There are a plenty of ways of implementing this idea and my way is far away from the most efficient one and can be reorganized in various ways. So let's tackle all these problems step by step.   
+
+#### 2.1 Preprocessing
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;We will work with tm package primarily, use ggplot2 to visualize some content and several ulitilies from plyr package.
+
+```{r library inclusion, message=FALSE}
+tmp <- sapply(c("tm", "plyr", "ggplot2", "wordcloud"),
+              require, character.only = TRUE, quietly = TRUE)
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;I have here 10 articles about the future trends of the 2017 they are ok for us to use them as a text data.
+
+```{r corpus corpus loading}
+dirscr <- DirSource("~/Data Science/Data/text/future-trends-text/")
+corpus <- VCorpus(dirscr)
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;As always we need to make several steps of the preprocessing removing new line characters, punctuation, converting all text to lower case and stemming the collection to reduce all words to their base or root form. Note I do not remove stop words or the most frequent meaningless words, because we will use some heuristic to take advantage of their presence treating them differently.
+
+```{r preprocessing}
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+corpus <- tm_map(corpus, toSpace, "\n")
+corpus <- tm_map(corpus, tolower)
+corpus <- tm_map(corpus, removePunctuation)
+corpus <- tm_map(corpus, stemDocument)
+```
+
+#### 2.2 Getting context
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;We have to define the context for every word over which we are going to compute the similarity. Usually left and right contexts from the left and the right sides of a word are used. 
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;The function bellow will get context given a corpus of documents, a word as a center of the context and size of the context in words (negative - left context, positive - right context).
+
+```{r getting context function}
+get.context <- function(corpus, word, size){
+  ## get stemmed version of the word
+  word <- stemDocument(word)
+  tm_map(corpus, function(x) {
+    ## separate the text into single words
+    sep <- lapply(x, strsplit, ' ')
+    ## search the word we are interested in
+    occ <- grep(word,sep)
+    ## if there any word in the document
+    if(length(occ) > 0){
+      ## find its position in the document
+      pos <- sapply(occ, function(o) list(which(word == unlist(sep[o]))) )
+      cont <- c()
+      ## and for every position get the context
+      for(i in seq_len(length(occ)))
+        for(j in seq_len(length(pos[[i]]))){
+          m <- min(max(pos[[i]][j]+size,0), length(sep[[occ[i]]][[1]]))
+          cont <- c(cont, sep[[occ[i]]][[1]][(pos[[i]][j]:(m))[-1]])
+        }
+      return(cont)
+    }
+  })
+}
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;One way of representing a context is to plot a wordcloud.    
+
+#### 2.3 Contexts representation
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Left context tend to be shorter that the right. It is not the perfect rule but can be considered as a thumb rule. Our left context has a size of 4 words and right of 8 words.
+```{r wordcloud, fig.keep='none'}
+## take two words "business" and "company"
+left.context1 <- get.context(corpus, "business", -4)
+right.context1 <- get.context(corpus, "business", 8)
+left.context2 <- get.context(corpus, "company", -4)
+right.context2 <- get.context(corpus, "company", 8)
+
+freq1 <- count(c(unlist(left.context1),unlist(right.context1)))
+freq2 <- count(c(unlist(left.context2),unlist(right.context2)))
+set.seed(42)
+pal <- brewer.pal(9, "BuGn")
+pal <- pal[-(1:2)]
+wordcloud(freq1$x,freq1$freq, scale=c(8,.3),min.freq=2,max.words=100, random.order=T, rot.per=.15, colors=pal, vfont=c("sans serif","plain"))
+wordcloud(freq2$x,freq2$freq, scale=c(8,.3),min.freq=2,max.words=100, random.order=T, rot.per=.15, colors=pal, vfont=c("sans serif","plain"))
+```
+
+
+"business" context         |  "company" context
+:-------------------------:|:-------------------------:
+![](Rplot1.png)            |  ![](Rplot2.png)
+
+***
+
+#### 2.4 Penalizing popular terms
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Well as you observe the frequencies of meaningless words are higher then the meaningful ones. One functional way of tackling this is to use what is called IDF (Inverse Document Frequency). IDF penalizes popular terms, that is terms which appear in many documents as meaningless words tend to do so. The function is defined in the next way   
+
+$IDF(word) = \log(\frac{M+1}{k})$
+
+where M is total number of documents in collection and k is total number of documents containing the *word*
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;This function returns a number of documents the word appears in.
+```{r document frequency}
+DocFreq <- function(word, doc){
+  findTerm <- function(doc, word) sum(unlist(sapply(sapply(sapply(doc, strsplit, ' '), function(w) w == word), sum )))
+  t <- tm_map(corpus, findTerm, word)
+  t <- tm_map(t, function(d) if(d[1] > 0) return(1) )
+  return(sum(unlist(t)))
+}
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;In order to see what effect IDF produces we need to define common vocabulary or common word vector space of two contexts to compare.
+
+```{r common word vector space}
+c1 <- count(unlist(left.context1))
+c2 <- count(unlist(left.context2))
+common.bag <- merge(c1,c2, by = "x", all = T)
+common.bag[,2:3][is.na(common.bag[,2:3])] <- 0
+doc.freqs <- data.frame(d.freq = sapply(as.list(common.bag$x), DocFreq, corpus), idf=log((length(corpus)+1)/sapply(as.list(common.bag$x), DocFreq, corpus)))
+g1 <- ggplot(doc.freqs, aes(x=d.freq, y=idf))
+g1 <- g1 + labs(x="Docement Frequency", y="IDF")
+g1 + geom_line(size=2)
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;The terms that have high document frequency are penalized and ones with low frequency even emphasized.    
+
+#### 2.5 Penalizing frequent terms
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;We are in one step to finish. The last step would be to find a way of penalizing frequent terms so as to put a limit of frequency such as no word can surpass some limit. This can be achieved adapting one hueristic function used in the information retrieval theory, BM25. BM25 is a sublinear transformation function which will solve the problem we address. This is the formula for it
+
+$BM25(word_i,document) = \frac{(k+1)*count(word_i,document)}{count(word_i,document) + k*(1-b+b*|document|/mean(document))}$
+
+where $k \in [0,+\infty)$ establishes the limit for the function, count is a count of words in the document, $b \in [0,1]$ is the lenght of the normalization, |document| is the total number of word the document and mean(document) is the average value of the words in one document. In our case we use a context as a document.    
+It is also necessary to normalize BM25 weighted vector
+
+$p(word_i,document)' = \frac{BM25(word_i,docuemrnt)}{\sum_i{BM25(word_i,document)}}$
+
+Here we go defining the BM25 function 
+```{r BM25 definition}
+## examining all frequency values I've decided to put these values to k and b
+k <- 10
+b <- .05
+## mean(document). 4 from the assumption that in most cases the context will be of 4 words
+avdl <- 4
+bm25.l1 <- ((k + 1)*common.bag$freq.x)/(common.bag$freq.x-b+b*sum(common.bag$freq.x)/avdl)
+bm25.l2 <- ((k + 1)*common.bag$freq.y)/(common.bag$freq.y-b+b*sum(common.bag$freq.y)/avdl)
+bm25.l1 <- bm25.l1/sum(bm25.l1)
+bm25.l2 <- bm25.l2/sum(bm25.l2)
+df.bm25 <- data.frame(words=common.bag$x,freqs=common.bag$freq.x, bm25=bm25.l1,eowc=common.bag$freq.x/sum(common.bag$freq.x))
+g2 <- ggplot(df.bm25,aes(x=freqs, y=bm25))
+g2 <- g2 + geom_line(aes(color="blue"))
+g2 <- g2 + geom_line(aes(x=freqs, y=eowc, color="red"))
+g2 <- g2 + labs(title="Waighting functions comparison",x="Frequecy",y="Weighting function")
+g2 + scale_colour_manual(name = "Weighting\nfunction", 
+                         labels = c("BM25","EOWC"), values =c("blue","red"))
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;So you see the crear difference between EOWC and BM25 weighted values. BM25 becomes our new features which characterize words. 
+
+### **3. Similarity measurement**
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;So finally the similarity value of two contexts looks like the sum over all IDF weighted features overlapping
+
+```{r similarity}
+sum(doc.freqs$idf*bm25.l1*bm25.l2)
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Putting altogether we can define next function which measures the similarity of two contexts
+
+```{r contexts similarity function}
+sim <- function(con1, con2, corpus, cont.num){
+  # bags of words of every context
+  bag1 <- count(unlist(con1))
+  bag2 <- count(unlist(con2))
+  # number of documents in collection
+  numDocCol <- length(corpus)
+  ## common vocabulary
+  com.bag <- merge(bag1,bag2, by = "x", all = T)
+  com.bag[,2:3][is.na(com.bag[,2:3])] <- 0
+  # document frequency of every word
+  doc.freqs <- sapply(as.list(com.bag$x), DocFreq, corpus)
+  # inverse document frequency of every word
+  IDF <- log((numDocCol+1)/doc.freqs)
+  
+  # BM25
+  k <- 10
+  b <- .05
+  avdl <- cont.num
+  BM25.1 <- ((k + 1)*com.bag$freq.x)/(com.bag$freq.x-b+b*sum(com.bag$freq.x)/avdl)
+  BM25.1 <- BM25.1/sum(BM25.1)
+  BM25.2 <- ((k + 1)*com.bag$freq.y)/(com.bag$freq.y-b+b*sum(com.bag$freq.y)/avdl)
+  BM25.2 <- BM25.2/sum(BM25.2)
+  
+  return(sum(IDF*BM25.1*BM25.2))
+}
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;And similarity function of two words
+
+```{r words similarity function}
+similarity <- function(word1, word2, corpus) {
+  left.cont.size <- 4
+  right.cont.size <- 8
+  left.context1 <- get.context(corpus, word1, -left.cont.size)
+  left.context2 <- get.context(corpus, word2, -left.cont.size)
+  right.context1 <- get.context(corpus, word1, right.cont.size)
+  right.context2 <- get.context(corpus, word2, right.cont.size)
+  
+  return(left.cont.size/(left.cont.size+right.cont.size)*sim(left.context1, left.context2, corpus, left.cont.size)+right.cont.size/(left.cont.size+right.cont.size)*sim(right.context1, right.context2, corpus, right.cont.size))
+}
+```
+
+
+### **4. Results**
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;To check the results lets see with which of these words the word "trend" has more likely paradigmatic relation.
+
+```{r checking}
+## random sample
+## words <- levels(common.bag$x)[sample(x = 1:length(common.bag$x),size = 15)]
+## just to make it fixed
+words <- c("ai", "3", "two", "hold", "toward", "largest", "way", "challeng", "look",   "the", "financi", "affect", "fertil", "carri", "green")
+sim.values <- sapply(as.list(words), similarity, "trend", corpus)
+sim.values[is.nan(sim.values)] <- 0
+df.res <- data.frame(words=words, sim=sim.values)
+
+g3 <- ggplot(df.res)
+g3 <- g3 + geom_text(aes(x=1:length(sim), y=sim, label=words))
+g3 + labs(x="Words", y="Context similarity")
+```
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;You can observe that the word "trend" is much more likely to have paradigmatic relations with words having root "fananci" and "challeng" than "fertil" or "green".
+
+***
+
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;As I have said there are a planty of ways in which this idea can be implemented. Anyway it is an interesting tool about discovering knowledge about language using statistical methods.
